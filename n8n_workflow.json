@@ -1,0 +1,182 @@
+{
+  "name": "NVIDIA Telegram Image Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ]
+      },
+      "id": "e9323f46-db39-4444-8d96-c67d8f4b0001",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const msg = $input.first().json.message;\nif (!msg) return [];\n\nconst chatType = msg.chat.type;\nconst text = msg.text || '';\nlet prompt = '';\nlet shouldGenerate = false;\n\n// We will fetch the bot's username dynamically if possible or assume command syntax\nif (chatType === 'private') {\n    if (!text.startsWith('/')) {\n        prompt = text;\n        shouldGenerate = true;\n    }\n} else {\n    // In groups, trigger on /generate, /gen, or mention\n    if (text.startsWith('/generate ') || text.startsWith('/gen ')) {\n        const parts = text.split(' ');\n        parts.shift();\n        prompt = parts.join(' ');\n        shouldGenerate = true;\n    } else if (text.includes('@') && text.toLowerCase().includes('bot')) {\n        // Fallback matching for any bot mention\n        const mentionMatch = text.match(/@\\w+bot/i);\n        if (mentionMatch) {\n            prompt = text.replace(mentionMatch[0], '').trim();\n            shouldGenerate = true;\n        }\n    }\n}\n\nreturn [{\n    json: {\n        chatId: msg.chat.id,\n        messageId: msg.message_id,\n        prompt: prompt.trim(),\n        shouldGenerate: shouldGenerate\n    }\n}];"
+      },
+      "id": "e9323f46-db39-4444-8d96-c67d8f4b0002",
+      "name": "Extract Prompt & Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        470,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.shouldGenerate }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "e9323f46-db39-4444-8d96-c67d8f4b0003",
+      "name": "Filter Trigger",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        690,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-schnell",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_NVIDIA_API_KEY_HERE"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"prompt\": \"{{ $json.prompt }}\",\n  \"seed\": 0,\n  \"steps\": 4\n}",
+        "options": {}
+      },
+      "id": "e9323f46-db39-4444-8d96-c67d8f4b0004",
+      "name": "NVIDIA API Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        910,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const responseData = $input.first().json;\nconst extractPromptNode = $node[\"Extract Prompt & Filter\"].json;\n\nif (!responseData.artifacts || !responseData.artifacts[0]) {\n    throw new Error(\"No image returned from NVIDIA API. Response: \" + JSON.stringify(responseData));\n}\n\nconst base64Data = responseData.artifacts[0].base64;\nconst buffer = Buffer.from(base64Data, 'base64');\n\nreturn {\n  json: {\n    chatId: extractPromptNode.chatId,\n    messageId: extractPromptNode.messageId,\n    prompt: extractPromptNode.prompt\n  },\n  binary: {\n    data: {\n      data: buffer,\n      mimeType: 'image/png',\n      fileName: 'generated_image.png'\n    }\n  }\n};"
+      },
+      "id": "e9323f46-db39-4444-8d96-c67d8f4b0005",
+      "name": "Convert Base64 to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1130,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendPhoto",
+        "chatId": "={{ $json.chatId }}",
+        "photo": "data",
+        "additionalFields": {
+          "caption": "✨ *Prompt:* {{ $json.prompt }}",
+          "parse_mode": "Markdown",
+          "reply_to_message_id": "={{ $json.messageId }}"
+        }
+      },
+      "id": "e9323f46-db39-4444-8d96-c67d8f4b0006",
+      "name": "Telegram Send Photo",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        1350,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Extract Prompt & Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Prompt & Filter": {
+      "main": [
+        [
+          {
+            "node": "Filter Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Trigger": {
+      "main": [
+        [
+          {
+            "node": "NVIDIA API Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NVIDIA API Call": {
+      "main": [
+        [
+          {
+            "node": "Convert Base64 to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Base64 to Binary": {
+      "main": [
+        [
+          {
+            "node": "Telegram Send Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {}
+}
